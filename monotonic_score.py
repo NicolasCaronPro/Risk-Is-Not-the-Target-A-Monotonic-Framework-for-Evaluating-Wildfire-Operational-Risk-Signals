@@ -1,3 +1,17 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from pathlib import Path
+
+import statsmodels.formula.api as smf
+
+from scipy import sparse
+from scipy.sparse.linalg import lsqr
+
+from sklearn.preprocessing import OneHotEncoder, SplineTransformer
+from sklearn.metrics import recall_score, f1_score, precision_score
+
 
 def fit_spline_mu_classic(df, df_spline=5):
     """
@@ -663,24 +677,7 @@ class Scoring:
         if y_pred.ndim > 1:
             y_pred = y_pred[:, 0]
 
-        iou   = iou_score(y_true, y_pred)
-        f1    = f1_score((y_true > 0).astype(int), (y_pred > 0).astype(int), zero_division=0)
-        prec  = precision_score((y_true > 0).astype(int), (y_pred > 0).astype(int), zero_division=0)
-        rec   = recall_score((y_true > 0).astype(int), (y_pred > 0).astype(int), zero_division=0)
-        f1_macro   = f1_score(y_true.astype(int), y_pred.astype(int), zero_division=0, average='macro')
-        prec_macro = precision_score(y_true.astype(int), y_pred.astype(int), zero_division=0, average='macro')
-        rec_macro  = recall_score(y_true.astype(int), y_pred.astype(int), zero_division=0, average='macro')
-        ent   = entropy(y_pred_probas) if y_pred_probas is not None else 0
-        #auoc  = auoc_func(conf_matrix=confusion_matrix(y_true, y_pred, labels=np.union1d(y_true, y_pred)))
-        under = under_prediction_score(y_true, y_pred)
-        over  = over_prediction_score(y_true, y_pred)
-
         results = {
-            'iou': iou, 'f1': f1, 'under': under, 'over': over,
-            'prec': prec, 'recall': rec,
-            'auoc': -1.0,
-            'f1_macro': f1_macro, 'prec_macro': prec_macro, 'rec_macro': rec_macro,
-            'ent': ent,
         }
         
         try:
