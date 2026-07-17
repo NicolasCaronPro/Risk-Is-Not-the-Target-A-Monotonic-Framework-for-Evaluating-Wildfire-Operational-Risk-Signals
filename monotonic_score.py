@@ -12,6 +12,16 @@ from scipy.sparse.linalg import lsqr
 from sklearn.preprocessing import OneHotEncoder, SplineTransformer
 from sklearn.metrics import recall_score, f1_score, precision_score
 
+# Not defined in the upstream module itself: taken from the reference
+# USAGE.ipynb notebook of the same repository, which the Scoring class
+# relies on at module level for every transition-based computation.
+PASSAGES = {
+    1: [(0, 1), (1, 2), (2, 3), (3, 4)],
+    2: [(0, 2), (1, 3), (2, 4)],
+    3: [(0, 3), (1, 4)],
+    4: [(0, 4)],
+}
+
 
 def fit_spline_mu_classic(df, df_spline=5):
     """
@@ -304,7 +314,8 @@ def compute_score_for_k(mu, sigma, k, lvl_counts,
         if n_a >= min_n and n_b >= min_n:
             delta = mu[b] - (mu[a] + min_gain)
             deltas.append(delta)
-            coverage += 1.0
+            #coverage += 1.0
+            coverage += min(n_a, n_b)
             
     # Filter based on min_k
     if coverage < min_k:
@@ -394,7 +405,7 @@ class Scoring:
         Retourne (mu, mu_dense, fit).
         """
         #return fit_spline_mu(df, df_spline=df_spline if df_spline is not None else self.df_spline)
-        return fit_spline_mu(df, df_spline=df_spline if df_spline is not None else self.df_spline)
+        return fit_spline_mu_classic(df, df_spline=df_spline if df_spline is not None else self.df_spline)
 
     def set_sigma(self, sigma):
         self.sigma = sigma
@@ -425,7 +436,7 @@ class Scoring:
                 delta = mu[b] - (mu[a] + min_gain)
                 deltas.append(delta)
                 pairs_used.append((a, b))
-                coverage += 1
+                coverage += min(n_a, n_b)
 
         raw_deltas_by_pair = {pair: d for pair, d in zip(pairs_used, deltas)}
         
@@ -605,6 +616,10 @@ class Scoring:
         score_high, score_low, coverage_k, score_adj_k, score_min_class, mu, mu_dense = \
             self.evaluation_scoring(ypred, ytrue, dates, zones)
 
+        # Filtrer mu pour n'inclure que les classes réellement prédites
+        predicted_classes = np.unique(np.clip(np.round(ypred), 0, 4).astype(int))
+        mu = {k: v for k, v in mu.items() if k in predicted_classes}
+
         fig, ax = plt.subplots(figsize=(10, 6))
 
         # Dense spline Curve
@@ -631,25 +646,13 @@ class Scoring:
         else:
             ylabel = "Adjusted Target Mean ($\mu$)"
 
-        raw_means = df_raw.groupby("lvl")["Y"].mean()
-        ax.scatter(raw_means.index, raw_means.values, marker='x', s=60, color='green', label='Raw Class Means (Unadjusted)', alpha=0.6)
-
         ax.set_title(title, fontsize=14)
         ax.set_xlabel("Predicted Class (0-4)", fontsize=12)
         ax.set_ylabel(ylabel, fontsize=12)
-        ax.set_xticks(range(5))
+        ax.set_xticks(predicted_classes)
         ax.grid(True, linestyle='--', alpha=0.6)
 
-        # Text box with scores
-        scores_text = (f"Score Low: {score_low:.4f}\n"
-                       f"Score High: {score_high:.4f}\n"
-                       f"Min Class Penalty: {score_min_class:.4f}\n"
-                       f"Total: {score_low+score_high+score_min_class:.4f}")
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
-        ax.text(0.05, 0.95, scores_text, transform=ax.transAxes, fontsize=10,
-                verticalalignment='top', bbox=props)
-
-        ax.legend(loc='lower right')
+        ax.legend(loc='upper left')
 
         if dir_output:
             out_path = Path(dir_output) / f"{title.lower().replace(' ', '_')}.png"
@@ -657,7 +660,6 @@ class Scoring:
             plt.savefig(out_path, dpi=150, bbox_inches='tight')
             print(f"Scoring plot saved to {out_path}")
 
-        plt.show()
         return fig
 
     # ------------------------------------------------------------------
@@ -677,7 +679,24 @@ class Scoring:
         if y_pred.ndim > 1:
             y_pred = y_pred[:, 0]
 
+        iou   = iou_score(y_true, y_pred)
+        f1    = f1_score((y_true > 0).astype(int), (y_pred > 0).astype(int), zero_division=0)
+        prec  = precision_score((y_true > 0).astype(int), (y_pred > 0).astype(int), zero_division=0)
+        rec   = recall_score((y_true > 0).astype(int), (y_pred > 0).astype(int), zero_division=0)
+        f1_macro   = f1_score(y_true.astype(int), y_pred.astype(int), zero_division=0, average='macro')
+        prec_macro = precision_score(y_true.astype(int), y_pred.astype(int), zero_division=0, average='macro')
+        rec_macro  = recall_score(y_true.astype(int), y_pred.astype(int), zero_division=0, average='macro')
+        ent   = entropy(y_pred_probas) if y_pred_probas is not None else 0
+        #auoc  = auoc_func(conf_matrix=confusion_matrix(y_true, y_pred, labels=np.union1d(y_true, y_pred)))
+        under = under_prediction_score(y_true, y_pred)
+        over  = over_prediction_score(y_true, y_pred)
+
         results = {
+            'iou': iou, 'f1': f1, 'under': under, 'over': over,
+            'prec': prec, 'recall': rec,
+            'auoc': -1.0,
+            'f1_macro': f1_macro, 'prec_macro': prec_macro, 'rec_macro': rec_macro,
+            'ent': ent,
         }
         
         try:
@@ -764,6 +783,8 @@ class Scoring:
         """
         import numpy as np
         import pandas as pd
+        import matplotlib
+        matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         from matplotlib.colors import TwoSlopeNorm
         from pathlib import Path
@@ -822,7 +843,7 @@ class Scoring:
                 delta_raw = mu[b] - (mu[a] + min_g)
                 delta_raw_mat[a, b] = delta_raw
                 valid_mat[a, b] = True
-
+                
                 if normalize_with_reference and getattr(self, "pair_mean_deltas", None):
                     denom = abs(self.pair_mean_deltas.get((a, b), 1.0)) or 1.0
                     delta_plot = delta_raw / denom
@@ -956,7 +977,6 @@ class Scoring:
             fig.savefig(out_path, dpi=150, bbox_inches="tight")
             print(f"Transition matrix saved to {out_path}")
 
-        plt.show()
 
         return fig, ax, delta_plot_mat, delta_raw_mat, coverage_eff_mat, valid_mat
     
@@ -974,6 +994,8 @@ class Scoring:
     ):
         import numpy as np
         import pandas as pd
+        import matplotlib
+        matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         from pathlib import Path
 
@@ -1063,7 +1085,12 @@ class Scoring:
                 ax.set_title(title)
 
             fig.tight_layout()
-            plt.show()
+            if dir_output is not None:
+                out_path = Path(dir_output) / f"{(title or 'fixed_effects').lower().replace(' ', '_')}.png"
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                fig.savefig(out_path, dpi=150, bbox_inches="tight")
+                print(f"Fixed-effects plot saved to {out_path}")
+            
             return fig, [ax], df_zone, df_date, fit
 
         # Taille dynamique
@@ -1128,5 +1155,4 @@ class Scoring:
             fig.savefig(out_path, dpi=150, bbox_inches="tight")
             print(f"Fixed-effects plot saved to {out_path}")
 
-        plt.show()
         return fig, axes, df_zone, df_date, fit
