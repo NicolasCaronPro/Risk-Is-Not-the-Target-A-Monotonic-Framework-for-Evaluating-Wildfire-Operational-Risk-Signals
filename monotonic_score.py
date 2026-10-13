@@ -91,42 +91,6 @@ def fit_spline_mu(
     lambda_curv: float = 10.0,
     dense_points: int = 101,
 ):
-    """
-    Fit léger en mémoire :
-        Y = intercept + f(score) + FE_zone + FE_date + eps
-
-    avec :
-    - f(score) : B-spline de faible rang
-    - FE_zone, FE_date : one-hot sparse si informatifs
-    - pénalisation de courbure sur les coeffs spline
-    - résolution sparse via LSQR
-
-    Règle importante
-    ----------------
-    Un effet fixe n'est inclus que s'il est informatif, c.-à-d. :
-      - il existe plusieurs modalités,
-      - mais pas une modalité différente pour chaque observation.
-
-    Donc :
-      - si zone est constante -> pas de FE_zone
-      - si chaque zone apparaît une seule fois -> pas de FE_zone
-      - si date est constante -> pas de FE_date
-      - si chaque date apparaît une seule fois -> pas de FE_date
-
-    Paramètres
-    ----------
-    df : DataFrame avec colonnes ['score', 'Y', 'zone', 'date']
-    df_spline : nombre de knots pour la spline
-    spline_degree : degré de la spline
-    lambda_curv : pénalité sur la dérivée seconde discrète des coeffs spline
-    dense_points : nb de points pour mu_dense
-
-    Retourne
-    --------
-    mu : dict {0: ..., 1: ..., 2: ..., 3: ..., 4: ...}
-    mu_dense : np.ndarray
-    fit : dict utile pour debug / prédiction
-    """
     import numpy as np
     import pandas as pd
     from scipy import sparse
@@ -297,10 +261,6 @@ def compute_score_for_k(mu, sigma, k, lvl_counts,
                         min_n=1, min_k=1,
                         w_avg=1.0, w_min=1.0, w_neg=1.0, w_viol=1.0,  # FIXED WEIGHTS
                         min_gain=0.0):
-    """
-    Computes the score for a given k based on deltas between levels.
-    Returns score and coverage (number of valid pairs |P_k*|).
-    """
     pairs = PASSAGES.get(k, [])
     deltas = []
     
@@ -352,26 +312,6 @@ def compute_score_for_k(mu, sigma, k, lvl_counts,
 
 
 class Scoring:
-    """
-    Classe regroupant les fonctions de scoring :
-      - fit_spline_mu
-      - compute_score_for_k
-      - evaluation_scoring
-      - evaluate_metrics
-
-    Les hyper-paramètres sont fixés à la construction et utilisés par défaut
-    dans chaque méthode (mais peuvent être surchargés par appel).
-
-    Normalisation de référence
-    --------------------------
-    Quand evaluation_scoring(reference=True) est appelé sur un jeu de données
-    de référence (ex. entraînement), la classe mémorise la moyenne absolue du
-    delta brut pour chaque transition (a→b) : pair_mean_deltas[(a,b)].
-
-    Lors des appels suivants avec reference=False, chaque delta est divisé par
-    la moyenne de référence correspondante (au lieu de sigma), permettant une
-    comparaison inter-runs sur la même échelle.
-    """
 
     def __init__(
         self,
@@ -400,10 +340,7 @@ class Scoring:
 
     # ------------------------------------------------------------------
     def fit_spline_mu(self, df, df_spline=None):
-        """
-        Ajuste un spline Y ~ bs(score) + C(zone) + C(date).
-        Retourne (mu, mu_dense, fit).
-        """
+    
         #return fit_spline_mu(df, df_spline=df_spline if df_spline is not None else self.df_spline)
         return fit_spline_mu_classic(df, df_spline=df_spline if df_spline is not None else self.df_spline)
 
@@ -415,14 +352,7 @@ class Scoring:
                                       min_n, min_k, min_gain,
                                       w_avg, w_min, w_neg, w_viol,
                                       pair_mean_deltas):
-        """
-        Version interne de compute_score_for_k qui supporte la normalisation
-        par pair_mean_deltas.
-        Sans pair_mean_deltas : les deltas sont utilisés bruts (pas de division par sigma).
-
-        Retourne (score, coverage, raw_deltas_by_pair)
-          - raw_deltas_by_pair : dict {(a,b): delta_brut} pour toutes les paires valides
-        """
+    
         pairs = PASSAGES.get(k, [])
         deltas = []
         pairs_used = []
@@ -485,10 +415,7 @@ class Scoring:
     def compute_score_for_k(self, mu, k, lvl_counts,
                             min_n=None, min_k=None, min_gain=None,
                             w_avg=None, w_min=None, w_neg=None, w_viol=None):
-        """
-        Calcule le score pour un passage k (avec normalisation de référence si disponible).
-        Retourne (score, coverage).
-        """
+    
         score, coverage, _ = self._compute_score_for_k_with_ref(
             mu, k, lvl_counts,
             min_n    = min_n    if min_n    is not None else self.min_n,
@@ -509,25 +436,7 @@ class Scoring:
                            df_spline=None, min_n=None, min_k=None,
                            min_gain=None, n0=None,
                            reference: bool = False):
-        """
-        Lance le scoring monotone complet.
-        
-        NOTE SUR L'INTERPRÉTATION DU SCORE :
-        L'objectif est d'obtenir le score le plus élevé possible, l'idéal étant de se 
-        rapprocher de 1.0. Plus le score est proche de 1.0, meilleure est la prédiction monotone.
-        Attention : il est extrêmement difficile d'atteindre 1.0. Le score pénalise très fortement 
-        les marges négatives et les violations de monotonie inter-classes.
-        
-        Paramètres
-        ----------
-        reference : bool (défaut False)
-            - True  : mémorise dans self.pair_mean_deltas la moyenne absolue
-            - False : si self.pair_mean_deltas est renseigné, normalise les
-                      deltas par les moyennes de référence stockées.
-                      Sans référence : deltas bruts (pas de division par sigma).
-
-        Retourne (score_high, score_low, coverage_k, score_adj_k, score_min_class, mu, mu_dense).
-        """
+                               
         _df_spline = df_spline if df_spline is not None else self.df_spline
         _min_n     = min_n     if min_n     is not None else self.min_n
         _min_k     = min_k     if min_k     is not None else self.min_k
@@ -745,42 +654,6 @@ class Scoring:
         figsize=(8, 6),
         vmax_abs=None,
     ):
-        """
-        Affiche la matrice des transitions Delta_{a->b} pour a < b.
-
-        Chaque case (a, b) de la matrice contient :
-        - le delta brut : mu[b] - (mu[a] + min_gain_k)
-        - ou le delta normalisé par la référence si normalize_with_reference=True
-        - la couverture effective min(n_a, n_b) entre crochets
-
-        Les cases non évaluables (n_a < min_n ou n_b < min_n) sont grisées.
-
-        Paramètres
-        ----------
-        ypred, ytrue, dates, zones : array-like
-            Données nécessaires au calcul monotone.
-        title : str or None
-            Titre de la figure. Si None, aucun titre n'est affiché.
-        dir_output : str or Path or None
-            Dossier de sortie pour sauvegarder la figure.
-        df_spline, min_n, min_gain :
-            Surcharges optionnelles des hyperparamètres de la classe.
-        normalize_with_reference : bool
-            Si True et si self.pair_mean_deltas est renseigné, chaque delta est divisé
-            par la valeur de référence associée à la paire (a, b).
-        show_effective_coverage : bool
-            Si True, ajoute [min(n_a, n_b)] dans les annotations.
-        annotate : bool
-            Si True, écrit les valeurs dans les cellules.
-        figsize : tuple
-            Taille de la figure.
-        vmax_abs : float or None
-            Borne absolue de la colorbar. Si None, calculée automatiquement.
-
-        Retour
-        ------
-        fig, ax, delta_plot_mat, delta_raw_mat, coverage_eff_mat, valid_mat
-        """
         import numpy as np
         import pandas as pd
         import matplotlib
